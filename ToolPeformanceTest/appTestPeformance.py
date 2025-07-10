@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_URL = "http://127.0.0.1:5000/user"
 NUM_REQUESTS = 300_000
-MAX_WORKERS = 1000  # số luồng tối đa tùy CPU/RAM
+MAX_WORKERS = 10000  # số luồng tối đa tùy CPU/RAM
 
 # Gửi 1 request POST với tên giả định
 def send_post_request(i):

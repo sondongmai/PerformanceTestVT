@@ -1,57 +1,107 @@
-import asyncio
-import aiohttp
+import tkinter as tk
+from tkinter import ttk, messagebox
+import requests
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
-API_URL = "http://127.0.0.1:5000/user"
-NUM_REQUESTS = 300_000
 
-async def send_post(session, i, stats):
-    start = time.perf_counter()
+def send_post_request(i, api_url):
     try:
-        async with session.post(API_URL, json={"name": f"User{i}"}, timeout=5) as resp:
-            elapsed = (time.perf_counter() - start) * 1000  # ms
-            if resp.status == 201:
-                stats["success"] += 1
-            else:
-                stats["fail"] += 1
-            stats["times"].append(elapsed)
+        start = time.perf_counter()
+        response = requests.post(api_url, json={"name": f"User{i}"}, timeout=5)
+        elapsed = (time.perf_counter() - start) * 1000
+        return response.status_code, elapsed
     except Exception:
-        stats["fail"] += 1
-        stats["times"].append(9999)
+        return "ERROR", 9999
 
-async def send_all_requests():
-    stats = {"success": 0, "fail": 0, "times": []}
-    connector = aiohttp.TCPConnector(limit=0)  # Không giới hạn kết nối đồng thời
-    timeout = aiohttp.ClientTimeout(total=10)
 
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        tasks = [send_post(session, i, stats) for i in range(NUM_REQUESTS)]
-        await asyncio.gather(*tasks)
+def run_test(api_url, num_requests, max_workers, output_text):
+    output_text.insert(tk.END, f"🔥 Sending {num_requests} requests with {max_workers} workers...\n")
 
-    return stats
+    start_time = time.time()
+    results = []
 
-def print_report(stats, total_time):
-    total = stats["success"] + stats["fail"]
-    lt_50ms = len([t for t in stats["times"] if t < 50])
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(send_post_request, i, api_url) for i in range(num_requests)]
 
-    print("\n==== 📊 Load Test Report ====")
-    print(f"Total Requests      : {total}")
-    print(f"✅ Successful (201) : {stats['success']} ({(stats['success'] / total) * 100:.2f}%)")
-    print(f"❌ Failed           : {stats['fail']} ({(stats['fail'] / total) * 100:.2f}%)")
-    print(f"<50ms Response      : {lt_50ms} ({(lt_50ms / total) * 100:.2f}%)")
-    print(f"Total Time Taken    : {total_time:.2f} s")
-    print("📈 Throughput       : {rps:.2f} requests/second".format(rps=total / total_time))
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
 
-    if (stats['success'] / total) >= 0.99 and (lt_50ms / total) >= 0.9:
-        print("✅ PASS: Success >= 99% & <50ms >= 90%")
+    total_time = time.time() - start_time
+
+    success_count = sum(1 for status, _ in results if status == 201)
+    lt_50ms_count = sum(1 for _, elapsed in results if elapsed < 50)
+    total = len(results)
+
+    success_pct = (success_count / total) * 100
+    lt_50ms_pct = (lt_50ms_count / total) * 100
+
+    output_text.insert(tk.END, "\n==== 📊 Load Test Report ====\n")
+    output_text.insert(tk.END, f"Total Requests             : {total}\n")
+    output_text.insert(tk.END, f"Successful (201)           : {success_count} ({success_pct:.2f}%)\n")
+    output_text.insert(tk.END, f"< 50ms Response            : {lt_50ms_count} ({lt_50ms_pct:.2f}%)\n")
+    output_text.insert(tk.END, f"Total Time Taken           : {total_time:.2f} s\n")
+    output_text.insert(tk.END, "===================================\n")
+
+    output_text.insert(tk.END, "\n==== ✅ Test Result Summary ====\n")
+    if success_pct >= 99 and lt_50ms_pct >= 90:
+        output_text.insert(tk.END, "✅ PASS: Success >= 99% and <50ms >= 90%\n")
     else:
-        print("❌ FAIL: Không đạt tiêu chí performance")
+        if success_pct < 99:
+            output_text.insert(tk.END, f"❌ FAIL: Only {success_pct:.2f}% requests successful (< 99%)\n")
+        if lt_50ms_pct < 90:
+            output_text.insert(tk.END, f"❌ FAIL: Only {lt_50ms_pct:.2f}% requests < 50ms (< 90%)\n")
+    output_text.insert(tk.END, "===================================\n\n")
+
+
+def start_test(api_entry, num_req_entry, workers_entry, output_text):
+    try:
+        api_url = api_entry.get().strip()
+        num_requests = int(num_req_entry.get())
+        max_workers = int(workers_entry.get())
+
+        if not api_url:
+            raise ValueError("API URL cannot be empty.")
+
+        output_text.delete(1.0, tk.END)
+        threading.Thread(target=run_test, args=(api_url, num_requests, max_workers, output_text), daemon=True).start()
+
+    except ValueError as e:
+        messagebox.showerror("Input Error", str(e))
+
+
+def create_gui():
+    root = tk.Tk()
+    root.title("🔥 Python Load Test Tool")
+    root.geometry("700x500")
+
+    # Inputs
+    tk.Label(root, text="API URL:").pack()
+    api_entry = tk.Entry(root, width=80)
+    api_entry.insert(0, "http://127.0.0.1:5000/user")
+    api_entry.pack(pady=5)
+
+    tk.Label(root, text="Number of Requests:").pack()
+    num_req_entry = tk.Entry(root)
+    num_req_entry.insert(0, "1000")
+    num_req_entry.pack(pady=5)
+
+    tk.Label(root, text="Number of Workers (Threads):").pack()
+    workers_entry = tk.Entry(root)
+    workers_entry.insert(0, "100")
+    workers_entry.pack(pady=5)
+
+    # Button
+    tk.Button(root, text="🚀 Start Load Test", command=lambda: start_test(api_entry, num_req_entry, workers_entry, output_text)).pack(pady=10)
+
+    # Output log
+    output_text = tk.Text(root, height=20, width=80, wrap="word")
+    output_text.pack(pady=10)
+
+    root.mainloop()
+
 
 if __name__ == "__main__":
-    print(f"🚀 Sending {NUM_REQUESTS} requests concurrently (all at once)...")
-
-    start = time.time()
-    stats = asyncio.run(send_all_requests())
-    duration = time.time() - start
-
-    print_report(stats, duration)
+    create_gui()
